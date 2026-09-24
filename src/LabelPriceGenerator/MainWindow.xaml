@@ -1,0 +1,407 @@
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using BarcodeLib;
+
+namespace LabelPriceGenerator;
+
+public partial class MainWindow : Window
+{
+    private readonly JsonProductRepository _repository = new();
+    private readonly ObservableCollection<Product> _products;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        _products = new ObservableCollection<Product>(_repository.LoadProducts());
+        ProductGrid.ItemsSource = _products;
+
+        if (_products.Count > 0)
+        {
+            ProductGrid.SelectedIndex = 0;
+            LoadProductIntoForm(_products[0]);
+        }
+        else
+        {
+            AddSampleProduct();
+        }
+
+        ProductGrid.SelectionChanged += ProductGrid_SelectionChanged;
+        AddButton.Click += AddButton_Click;
+        DeleteButton.Click += DeleteButton_Click;
+        SaveButton.Click += SaveButton_Click;
+        RefreshPreviewButton.Click += RefreshPreviewButton_Click;
+        ExportPdfButton.Click += ExportPdfButton_Click;
+        ClearFormButton.Click += ClearFormButton_Click;
+        NameTextBox.TextChanged += (_, _) => UpdatePreview();
+        PriceTextBox.TextChanged += (_, _) => UpdatePreview();
+        PromoPriceTextBox.TextChanged += (_, _) => UpdatePreview();
+        BarcodeTextBox.TextChanged += (_, _) => UpdatePreview();
+        UnitTextBox.TextChanged += (_, _) => UpdatePreview();
+
+        UpdatePreview();
+    }
+
+    private void ProductGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ProductGrid.SelectedItem is Product product)
+        {
+            LoadProductIntoForm(product);
+        }
+    }
+
+    private void AddButton_Click(object sender, RoutedEventArgs e)
+    {
+        var product = new Product
+        {
+            Name = "Produs nou",
+            Price = 10m,
+            PromoPrice = null,
+            Unit = "buc",
+            Barcode = DateTime.Now.Ticks.ToString(),
+            CreatedAt = DateTime.Now
+        };
+
+        _products.Add(product);
+        ProductGrid.SelectedItem = product;
+        ProductGrid.ScrollIntoView(product);
+        SaveProducts();
+        LoadProductIntoForm(product);
+        UpdatePreview();
+    }
+
+    private void DeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProductGrid.SelectedItem is not Product product)
+        {
+            return;
+        }
+
+        _products.Remove(product);
+        SaveProducts();
+
+        if (_products.Count > 0)
+        {
+            ProductGrid.SelectedIndex = 0;
+        }
+        else
+        {
+            ClearForm();
+        }
+    }
+
+    private void SaveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProductGrid.SelectedItem is not Product product)
+        {
+            return;
+        }
+
+        product.Name = NameTextBox.Text.Trim();
+        product.Price = ParseDecimal(PriceTextBox.Text);
+        product.PromoPrice = ParseNullableDecimal(PromoPriceTextBox.Text);
+        product.Unit = UnitTextBox.Text.Trim();
+        product.Barcode = BarcodeTextBox.Text.Trim();
+        product.Notes = NotesTextBox.Text.Trim();
+
+        SaveProducts();
+        ProductGrid.Items.Refresh();
+        UpdatePreview();
+        MessageBox.Show("Produsul a fost salvat.", "Succes", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void RefreshPreviewButton_Click(object sender, RoutedEventArgs e)
+    {
+        UpdatePreview();
+    }
+
+    private void ExportPdfButton_Click(object sender, RoutedEventArgs e)
+    {
+        var fileDialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = "PDF|*.pdf",
+            FileName = "etichetelor.pdf",
+            DefaultExt = ".pdf"
+        };
+
+        if (fileDialog.ShowDialog() == true)
+        {
+            var products = _products.ToList();
+            PdfExportService.ExportToPdf(products, fileDialog.FileName);
+            MessageBox.Show($"Fișier exportat: {fileDialog.FileName}", "Succes", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+
+    private void ClearFormButton_Click(object sender, RoutedEventArgs e)
+    {
+        ClearForm();
+    }
+
+    private void UpdatePreview()
+    {
+        var previewProduct = BuildPreviewFromForm();
+        var image = LabelPreviewService.GeneratePriceLabel(previewProduct);
+        PreviewImage.Source = image;
+    }
+
+    private Product BuildPreviewFromForm()
+    {
+        return new Product
+        {
+            Name = NameTextBox.Text.Trim(),
+            Price = ParseDecimal(PriceTextBox.Text),
+            PromoPrice = ParseNullableDecimal(PromoPriceTextBox.Text),
+            Unit = UnitTextBox.Text.Trim(),
+            Barcode = BarcodeTextBox.Text.Trim(),
+            Notes = NotesTextBox.Text.Trim()
+        };
+    }
+
+    private void LoadProductIntoForm(Product product)
+    {
+        NameTextBox.Text = product.Name;
+        PriceTextBox.Text = product.Price.ToString("0.00");
+        PromoPriceTextBox.Text = product.PromoPrice.HasValue ? product.PromoPrice.Value.ToString("0.00") : string.Empty;
+        UnitTextBox.Text = product.Unit;
+        BarcodeTextBox.Text = product.Barcode;
+        NotesTextBox.Text = product.Notes ?? string.Empty;
+        UpdatePreview();
+    }
+
+    private void ClearForm()
+    {
+        NameTextBox.Text = string.Empty;
+        PriceTextBox.Text = string.Empty;
+        PromoPriceTextBox.Text = string.Empty;
+        UnitTextBox.Text = string.Empty;
+        BarcodeTextBox.Text = string.Empty;
+        NotesTextBox.Text = string.Empty;
+        PreviewImage.Source = null;
+    }
+
+    private void AddSampleProduct()
+    {
+        var sample = new Product
+        {
+            Name = "Paine alba",
+            Price = 7.50m,
+            PromoPrice = 6.90m,
+            Unit = "buc",
+            Barcode = "5901234123457",
+            Notes = "Eticheta standard",
+            CreatedAt = DateTime.Now
+        };
+
+        _products.Add(sample);
+        ProductGrid.SelectedItem = sample;
+        LoadProductIntoForm(sample);
+    }
+
+    private void SaveProducts()
+    {
+        _repository.SaveProducts(_products.ToList());
+    }
+
+    private static decimal ParseDecimal(string value)
+    {
+        return decimal.TryParse(value, out var result) ? result : 0m;
+    }
+
+    private static decimal? ParseNullableDecimal(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : ParseDecimal(value);
+    }
+}
+
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public decimal Price { get; set; }
+    public decimal? PromoPrice { get; set; }
+    public string Unit { get; set; } = "buc";
+    public string Barcode { get; set; } = "";
+    public string? Notes { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.Now;
+}
+
+public class JsonProductRepository
+{
+    private readonly string _filePath;
+
+    public JsonProductRepository()
+    {
+        var appDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LabelPriceGenerator");
+        Directory.CreateDirectory(appDataFolder);
+        _filePath = Path.Combine(appDataFolder, "products.json");
+    }
+
+    public List<Product> LoadProducts()
+    {
+        if (!File.Exists(_filePath))
+        {
+            return new List<Product>();
+        }
+
+        var content = File.ReadAllText(_filePath);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return new List<Product>();
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<Product>>(content) ?? new List<Product>();
+        }
+        catch
+        {
+            return new List<Product>();
+        }
+    }
+
+    public void SaveProducts(List<Product> products)
+    {
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        File.WriteAllText(_filePath, JsonSerializer.Serialize(products, options));
+    }
+}
+
+public static class LabelPreviewService
+{
+    public static ImageSource GeneratePriceLabel(Product product)
+    {
+        if (string.IsNullOrWhiteSpace(product.Name) && string.IsNullOrWhiteSpace(product.Barcode))
+        {
+            return null!;
+        }
+
+        var barcodeText = string.IsNullOrWhiteSpace(product.Barcode) ? "0000000000000" : product.Barcode;
+        var bitmap = new Barcode().Encode(TYPE.CODE128, barcodeText, System.Drawing.Color.Black, System.Drawing.Color.White, 320, 90);
+        var bitmapSource = ConvertToBitmapSource(bitmap);
+
+        var drawing = new DrawingVisual();
+        using (var dc = drawing.RenderOpen())
+        {
+            var background = new SolidColorBrush(Colors.White);
+            var borderBrush = new SolidColorBrush(Colors.Gray);
+            var titleBrush = new SolidColorBrush(Colors.Black);
+            var priceBrush = new SolidColorBrush(Colors.DarkGreen);
+            var textBrush = new SolidColorBrush(Colors.Black);
+
+            dc.DrawRectangle(background, null, new Rect(0, 0, 430, 260));
+            dc.DrawRectangle(null, new Pen(borderBrush, 1.5), new Rect(10, 10, 410, 240));
+
+            dc.DrawText(new FormattedText(
+                product.Name,
+                System.Globalization.CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal),
+                24,
+                titleBrush),
+                new System.Windows.Point(24, 18));
+
+            dc.DrawText(new FormattedText(
+                product.PromoPrice.HasValue ? $"{product.PromoPrice.Value:0.00} lei" : $"{product.Price:0.00} lei",
+                System.Globalization.CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal),
+                36,
+                priceBrush),
+                new System.Windows.Point(24, 70));
+
+            if (product.PromoPrice.HasValue)
+            {
+                dc.DrawText(new FormattedText(
+                    $"Pret normal: {product.Price:0.00} lei",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight,
+                    new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                    16,
+                    Brushes.Gray),
+                    new System.Windows.Point(24, 118));
+            }
+
+            var barcodeWidth = 300;
+            var barcodeHeight = 90;
+            var imageRect = new Rect(60, 150, barcodeWidth, barcodeHeight);
+            dc.DrawImage(bitmapSource, imageRect);
+
+            dc.DrawText(new FormattedText(
+                product.Barcode,
+                System.Globalization.CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                16,
+                textBrush),
+                new System.Windows.Point(110, 245));
+        }
+
+        var renderBitmap = new RenderTargetBitmap(430, 260, 96, 96, PixelFormats.Pbgra32);
+        renderBitmap.Render(drawing);
+        return renderBitmap;
+    }
+
+    private static BitmapSource ConvertToBitmapSource(System.Drawing.Bitmap bitmap)
+    {
+        var bitmapData = bitmap.LockBits(
+            new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height),
+            System.Drawing.Imaging.ImageLockMode.ReadOnly,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+        var source = BitmapSource.Create(
+            bitmapData.Width,
+            bitmapData.Height,
+            bitmap.HorizontalResolution,
+            bitmap.VerticalResolution,
+            PixelFormats.Bgra32,
+            null,
+            bitmapData.Scan0,
+            bitmapData.Stride * bitmapData.Height,
+            bitmapData.Stride);
+
+        source.Freeze();
+        bitmap.UnlockBits(bitmapData);
+        return source;
+    }
+}
+
+public static class PdfExportService
+{
+    public static void ExportToPdf(List<Product> products, string destinationPath)
+    {
+        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+
+        QuestPDF.Fluent.Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(24);
+                page.DefaultTextStyle(x => x.FontSize(12));
+
+                page.Content().Column(column =>
+                {
+                    foreach (var product in products)
+                    {
+                        column.Item().Border(1).Padding(12).Column(inner =>
+                        {
+                            inner.Item().Text(product.Name).FontSize(22).Bold();
+                            inner.Item().Text($"Pret: {product.Price:0.00} lei");
+                            if (product.PromoPrice.HasValue)
+                            {
+                                inner.Item().Text($"Promo: {product.PromoPrice.Value:0.00} lei");
+                            }
+                            inner.Item().Text($"Unitate: {product.Unit}");
+                            inner.Item().Text($"Cod bare: {product.Barcode}");
+                            inner.Item().Text(product.Notes ?? string.Empty);
+                        });
+                    }
+                });
+            });
+        }).GeneratePdf(destinationPath);
+    }
+}
