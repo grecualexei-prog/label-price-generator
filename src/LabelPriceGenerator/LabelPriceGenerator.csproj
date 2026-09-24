@@ -1,25 +1,41 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWPF>true</UseWPF>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Platforms>x64</Platforms>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <UseWindowsForms>false</UseWindowsForms>
-    <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
-    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-  </PropertyGroup>
+using QuestPDF.Fluent;
+using QuestPDF.Infrastructure;
 
-  <ItemGroup>
-    <PackageReference Include="BarcodeLib" Version="3.0.3" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
-    <PackageReference Include="QuestPDF" Version="2024.7.0" />
-  </ItemGroup>
+namespace LabelPriceGenerator;
 
-  <ItemGroup>
-    <Folder Include="Assets\" />
-  </ItemGroup>
-</Project>
+public static class PdfExportService
+{
+    public static void ExportToPdf(List<Product> products, string destinationPath)
+    {
+        Settings.License = LicenseType.Community;
+
+        Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(24);
+                page.DefaultTextStyle(x => x.FontSize(12));
+
+                page.Content().Column(column =>
+                {
+                    foreach (var product in products)
+                    {
+                        column.Item().Border(1).Padding(12).Column(inner =>
+                        {
+                            inner.Item().Text(product.Name).FontSize(22).Bold();
+                            inner.Item().Text($"Pret: {product.Price:0.00} lei");
+                            if (product.PromoPrice.HasValue)
+                            {
+                                inner.Item().Text($"Promo: {product.PromoPrice.Value:0.00} lei");
+                            }
+                            inner.Item().Text($"Unitate: {product.Unit}");
+                            inner.Item().Text($"Cod bare: {product.Barcode}");
+                            inner.Item().Text(product.Notes ?? string.Empty);
+                        });
+                    }
+                });
+            });
+        }).GeneratePdf(destinationPath);
+    }
+}
